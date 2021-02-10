@@ -1,0 +1,289 @@
+---
+title: "Biostat 234: Lab 3"
+author: "Minsoo Kim"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(R2jags)
+library(lattice)
+set.seed(1234)
+
+load("AddBurnin.RData")
+
+# Function that summarizes posterior distribution
+mysummary = function(invector) {
+  c(mean = mean(invector), 
+    sd = sd(invector), 
+    quantile(invector, .025), 
+    quantile(invector, .975),
+    `P > 0` = sum(invector > 0) / length(invector))
+} 
+
+data <- read.table("data.txt")
+colnames(data) <- c("death", "n",	"intercept",	"iss",	"rts", 
+                    "age", "ti", "age * ti")
+
+# Estimate prior for beta from six samples
+Xp <- as.matrix(data[1:6, 3:8])
+Yp <- data[1:6, 1]
+np <- data[1:6, 2]
+
+invXp <- solve(Xp)
+
+Xobs <- as.matrix(data[7:306, 3:8])
+Yobs <- data[7:306, 1]
+nobs <- data[7:306, 2]
+
+#sink("priors.txt")
+#cat("
+#  model{
+#  	betas <- invXp %*% logitp[]
+#  
+#  	for (j in 1:6) {
+#  		logitp[j] <- logit(pie[j])
+#  	}
+#  	pie[1] ~ dbeta(1.1, 8.5)
+#  	pie[2] ~ dbeta(3.0, 11.0)
+#  	pie[3] ~ dbeta(5.9, 1.7)
+#  	pie[4] ~ dbeta(1.3, 12.9)
+#  	pie[5] ~ dbeta(1.1, 4.9)
+#  	pie[6] ~ dbeta(1.5, 5.5)
+#  }
+#  ", fill = TRUE)
+#sink()
+
+ex1.data <- list(invXp = invXp)
+ex1.inits <- rep(list(list(pie = c(0.5, 0.5, 0.5, 0.5, 0.5, 0.5))), 5)
+ex1.parameters <- c("betas", "pie[1:6]")
+
+ex1.out <- jags(ex1.data, ex1.inits, ex1.parameters, "priors.txt", 
+                n.chains = 5, n.iter = 11000, n.burnin = 0, n.thin = 2, DIC = F)
+
+Output1 <- AddBurnin(ex1.out$BUGSoutput$sims.array, burnin = 1000, n.thin = 2)
+#print(Output1$Burnin.Summary)
+
+#sink("posteriors.txt")
+#cat("
+#  model{
+#  	betas <- invXp %*% logitp[]
+#
+#  	for (j in 1:6) {
+#  		logitp[j] <- logit(pie[j])
+#  	}
+#  	pie[1] ~ dbeta(1.1, 8.5)
+#  	pie[2] ~ dbeta(3.0, 11.0)
+#  	pie[3] ~ dbeta(5.9, 1.7)
+#  	pie[4] ~ dbeta(1.3, 12.9)
+#  	pie[5] ~ dbeta(1.1, 4.9)
+#  	pie[6] ~ dbeta(1.5, 5.5)
+#  	
+#  	for(i in 1:T) {
+#  	  y[i] ~ dbern(p[i])
+#  	  p[i] <- ilogit(inprod(x[i, ], betas[]))
+#  	}
+#  }
+#  ", fill = TRUE)
+#sink()
+
+ex2.data <- list(x = Xobs, y = Yobs, T = 300, invXp = invXp)
+ex2.inits <- rep(list(list(pie = c(0.5, 0.5, 0.5, 0.5, 0.5, 0.5))), 5)
+ex2.parameters <- c("betas", "pie[1:6]")
+
+ex2.out <- jags(ex2.data, ex2.inits, ex2.parameters, "posteriors.txt", 
+                n.chains = 5, n.iter = 11000, n.burnin = 0, n.thin = 2, DIC = F)
+
+#Treat the first 1000 iterations as a burn in	
+Output2 = AddBurnin(ex2.out$BUGSoutput$sims.array, burnin = 1000, n.thin = 2)
+
+ex3.data <- list(x = Xobs, y = Yobs, T = 100, invXp = invXp)
+ex3.inits <- rep(list(list(pie = c(0.5, 0.5, 0.5, 0.5, 0.5, 0.5))), 5)
+ex3.parameters <- c("betas", "pie[1:6]")
+
+ex3.out <- jags(ex3.data, ex3.inits, ex3.parameters, "posteriors.txt", 
+                n.chains = 5, n.iter = 11000, n.burnin = 0, n.thin = 2, DIC = F)
+
+#Treat the first 1000 iterations as a burn in	
+Output3 = AddBurnin(ex3.out$BUGSoutput$sims.array, burnin = 1000, n.thin = 2)
+```
+
+## Question 1
+```{r, out.width="50%"}
+temp <- Output2$Burnin.sims.matrix
+beta1 <- temp[, 1]
+beta2 <- temp[, 2]
+beta3 <- temp[, 3]
+beta4 <- temp[, 4]
+beta5 <- temp[, 5]
+beta6 <- temp[, 6]
+
+plot(acf(beta1, lag.max = 200))
+plot(acf(beta2, lag.max = 200))
+plot(acf(beta3, lag.max = 200))
+plot(acf(beta4, lag.max = 200))
+plot(acf(beta5, lag.max = 200))
+plot(acf(beta6, lag.max = 200))
+```
+Autocorrelations hit zero for the 6 regression coefficients at different lags as seen above. By about 200 lags, all  autocorrelations are zero. 
+
+```{r, out.width="50%"}
+pie1 <- temp[, 7]
+pie2 <- temp[, 8]
+pie3 <- temp[, 9]
+pie4 <- temp[, 10]
+pie5 <- temp[, 11]
+pie6 <- temp[, 12]
+
+plot(acf(pie1, lag.max = 200))
+plot(acf(pie2, lag.max = 200))
+plot(acf(pie3, lag.max = 200))
+plot(acf(pie4, lag.max = 200))
+plot(acf(pie5, lag.max = 200))
+plot(acf(pie6, lag.max = 200))
+```
+The beta autocorrelations are better in general than the 6 pi’s as seen above. 
+
+\newpage
+
+## Question 2
+```{r, warning=FALSE, message=FALSE}
+library(knitr)
+df <- t(round(apply(temp, 2, mysummary), 2))
+kable(df)
+
+temp2 <- Output1$Burnin.sims.matrix
+df <- data.frame(`beta1 (T = 300)` = beta1, 
+                 `beta2 (T = 300)` = beta2, 
+                 `beta3 (T = 300)` = beta3, 
+                 `beta4 (T = 300)` = beta4, 
+                 `beta5 (T = 300)` = beta5, 
+                 `beta6 (T = 300)` = beta6, 
+                 `beta1 (prior)` = temp2[, 1],
+                 `beta2 (prior)` = temp2[, 2],
+                 `beta3 (prior)` = temp2[, 3],
+                 `beta4 (prior)` = temp2[, 4],
+                 `beta5 (prior)` = temp2[, 5],
+                 `beta6 (prior)` = temp2[, 6], check.names = FALSE)
+
+library(tidyverse)
+df %>% select(`beta1 (T = 300)`, `beta1 (prior)`) %>% gather(key = "beta", value = "coefficient") %>% 
+  ggplot(aes(coefficient, color = beta)) + 
+  geom_density() 
+
+df %>% select(`beta2 (T = 300)`, `beta1 (prior)`) %>% gather(key = "beta", value = "coefficient") %>% 
+  ggplot(aes(coefficient, color = beta)) + 
+  geom_density() 
+
+df %>% select(`beta3 (T = 300)`, `beta3 (prior)`) %>% gather(key = "beta", value = "coefficient") %>% 
+  ggplot(aes(coefficient, color = beta)) + 
+  geom_density() 
+
+df %>% select(`beta4 (T = 300)`, `beta4 (prior)`) %>% gather(key = "beta", value = "coefficient") %>% 
+  ggplot(aes(coefficient, color = beta)) + 
+  geom_density() 
+
+df %>% select(`beta5 (T = 300)`, `beta5 (prior)`) %>% gather(key = "beta", value = "coefficient") %>% 
+  ggplot(aes(coefficient, color = beta)) + 
+  geom_density() 
+
+df %>% select(`beta6 (T = 300)`, `beta6 (prior)`) %>% gather(key = "beta", value = "coefficient") %>% 
+  ggplot(aes(coefficient, color = beta)) + 
+  geom_density() 
+```
+
+As above, posterior distribution has much smaller variance compared to prior distribution for all regression coefficients.
+
+## Question 3
+```{r}
+temp3 <- Output3$Burnin.sims.matrix
+df <- data.frame(df, 
+                 `beta1 (T = 100)` = temp3[, 1],
+                 `beta2 (T = 100)` = temp3[, 2],
+                 `beta3 (T = 100)` = temp3[, 3],
+                 `beta4 (T = 100)` = temp3[, 4],
+                 `beta5 (T = 100)` = temp3[, 5],
+                 `beta6 (T = 100)` = temp3[, 6], check.names = FALSE)
+
+kable(t(round(apply(df, 2, mysummary), 2)))
+
+df %>% select(`beta1 (T = 300)`, `beta1 (prior)`, `beta1 (T = 100)`) %>% 
+  gather(key = "beta", value = "coefficient") %>% 
+  ggplot(aes(coefficient, color = beta)) + 
+  geom_density() 
+
+df %>% select(`beta2 (T = 300)`, `beta1 (prior)`, `beta2 (T = 100)`) %>% 
+  gather(key = "beta", value = "coefficient") %>% 
+  ggplot(aes(coefficient, color = beta)) + 
+  geom_density() 
+
+df %>% select(`beta3 (T = 300)`, `beta3 (prior)`, `beta3 (T = 100)`) %>% 
+  gather(key = "beta", value = "coefficient") %>% 
+  ggplot(aes(coefficient, color = beta)) + 
+  geom_density() 
+
+df %>% select(`beta4 (T = 300)`, `beta4 (prior)`, `beta4 (T = 100)`) %>% 
+  gather(key = "beta", value = "coefficient") %>% 
+  ggplot(aes(coefficient, color = beta)) + 
+  geom_density() 
+
+df %>% select(`beta5 (T = 300)`, `beta5 (prior)`, `beta5 (T = 100)`) %>% 
+  gather(key = "beta", value = "coefficient") %>% 
+  ggplot(aes(coefficient, color = beta)) + 
+  geom_density() 
+
+df %>% select(`beta6 (T = 300)`, `beta6 (prior)`, `beta6 (T = 100)`) %>% 
+  gather(key = "beta", value = "coefficient") %>% 
+  ggplot(aes(coefficient, color = beta)) + 
+  geom_density() 
+```
+
+As expected, posterior distribution incorporating more data gives sharper estimates of regression coefficients, but `T = 100` is already fairly good. 
+
+## Question 4
+$\pi$'s from `JAGS` output are posterior samples of the probability of death for the six samples, which were originally used for prior calculation of `beta`, after pooling information from the data. It is essentially refined estimate after incorporating the data. 
+
+## Question 5
+```{r, echo=TRUE}
+#sink("posteriors2.txt")
+#cat("
+#  model{
+#  	betas <- invXp %*% logitp[]
+#
+#  	for (j in 1:6) {
+#  		logitp[j] <- logit(pie[j])
+#  	}
+#  	pie[1] ~ dbeta(1.1, 8.5)
+#  	pie[2] ~ dbeta(3.0, 11.0)
+#  	pie[3] ~ dbeta(5.9, 1.7)
+#  	pie[4] ~ dbeta(1.3, 12.9)
+#  	pie[5] ~ dbeta(1.1, 4.9)
+#  	pie[6] ~ dbeta(1.5, 5.5)
+#  	
+#  	for(i in 1:T) {
+#  	  y[i] ~ dbern(p[i])
+#  	  p[i] <- ilogit(inprod(x[i, ], betas[]))
+#  	}
+#  	
+#  	futurefit1 <- ilogit(betas[1] + betas[2] * 2 + betas[3] * 7.55 + betas[4] * 25)
+#  	futurefit2 <- ilogit(betas[1] + betas[2] * 11 + betas[3] * 7.8408 + betas[4] * 42 +
+#  	  betas[5] + betas[6] * 42)
+#   futurefit3 <- ilogit(betas[1] + betas[2] * 16 + betas[3] * 7.8408 + betas[4] * 80 +
+#  	  betas[5] + betas[6] * 80)
+#  }
+#  ", fill = TRUE)
+#sink()
+
+ex4.data <- list(x = Xobs, y = Yobs, T = 300, invXp = invXp)
+ex4.inits <- rep(list(list(pie = c(0.5, 0.5, 0.5, 0.5, 0.5, 0.5))), 5)
+ex4.parameters <- c("betas", "pie[1:6]", 
+                    "futurefit1", "futurefit2", "futurefit3")
+
+ex4.out <- jags(ex4.data, ex4.inits, ex4.parameters, "posteriors2.txt", 
+                n.chains = 5, n.iter = 11000, n.burnin = 0, n.thin = 2, DIC = F)
+
+Output4 = AddBurnin(ex4.out$BUGSoutput$sims.array, burnin = 1000, n.thin = 2)
+
+kable(t(round(apply(Output4$Burnin.sims.matrix[, 7:9], 2, mysummary), 2)))
+```

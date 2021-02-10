@@ -1,0 +1,112 @@
+---
+title: "Biostat 234: Lab 1"
+author: "Minsoo Kim"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+rm(list = ls())
+options(stringsAsFactors = FALSE)
+
+library(tidyverse)
+library(R2jags)
+library(knitr)
+set.seed(1234)
+```
+
+# Question 1
+The information present in the chapter 5 of the JAGS manual differs depending on which version you look at (e.g. 4.3.0 vs 3.4.0). In version 3.4.0,the tables provide information on various functions on scalar and vector/matrix that are available in JAGS and in R. 
+
+# Question 2
+The distributions chapter of the JAGS manual goes over discrete and continuous, univariate and multivariate probability distributions that can be specified in JAGS (as prior distributions). The tables show the command for calling such distributions in R and corresponding analytic formulas. 
+
+# Question 3
+The `Stacks` example tests for 1) normal error model, 2) double exponential error model, 3) t (df = 4) error model with either independent normal prior or ridge prior on `beta` coefficients, so total 6 models. 
+
+# Question 4
+```{r, message=FALSE, warning=FALSE}
+x <- c(1, 2, 3, 4, 5)
+y <- c(1, 3, 3, 3, 5)
+N <- 5 
+x.bar <- 3
+jags.data <- list("x", "y", "N", "x.bar")
+jags.params <- c("alpha", "beta", "tau", "sigma")
+
+jags.inits = function() {
+  list("alpha" = 0, "beta" = 1, "tau" = 1)
+}
+
+{
+sink("model1.txt")
+cat("
+model {
+  for(i in 1:N) {
+    y[i] ~ dnorm(mu[i], tau)
+    mu[i] <- alpha + beta * (x[i] - x.bar)
+  }
+  alpha ~ dnorm(0, 0.0001)
+  beta ~ dnorm(1, 1)
+  tau ~ dgamma(.25, .25)
+  sigma <- 1/sqrt(tau)
+}", fill = TRUE)
+sink()
+}
+
+lab1.sim <- jags(jags.data, jags.inits, jags.params,
+                 model.file = "model1.txt", 
+                 n.chains = 3, n.iter = 11000, n.burnin = 1000)
+
+samples <- lab1.sim$BUGSoutput$sims.matrix
+
+data.frame(mean = (colSums(samples)/nrow(samples))[-3],
+           sd = apply(samples, 2, sd)[-3],
+           `2.5%` = apply(samples, 2, quantile, probs = 0.025)[-3],
+           `97.5%` = apply(samples, 2, quantile, probs = 0.975)[-3], 
+           check.names = FALSE) %>% 
+  kable()
+```
+This output is the same as `print(lab1.sim)` but abridged, providing the mean of posterior distribution of each parameter as well as its standard deviation, and 95% confidence interval. 
+
+## Question 5
+```{r, message=FALSE, warning=FALSE}
+for (i in c(100, 10, 1, .1, .01, .001)) {
+  sink("model1.txt")
+  cat("
+  model
+  {
+    for(i in 1:N) {
+      y[i] ~ dnorm(mu[i], tau)
+      mu[i] <- alpha + beta * (x[i] - x.bar)
+    }
+    alpha ~ dnorm(0, 0.0001)
+    beta ~ dnorm(1,", i, ")
+    tau ~ dgamma(.25, .25)
+    sigma <- 1/sqrt(tau)
+  }
+  ", fill = TRUE)
+  sink()
+  
+  lab1.sim <- jags(jags.data, jags.inits, jags.params,
+                   model.file = "model1.txt", 
+                   n.chains = 3, n.iter = 11000, n.burnin = 1000 )
+  
+  samples <- lab1.sim$BUGSoutput$sims.matrix
+  
+  cat("For precision = ", i, " \n")
+  data.frame(mean = (colSums(samples)/nrow(samples))[-3],
+             sd = apply(samples, 2, sd)[-3],
+             `2.5%` = apply(samples, 2, quantile, probs = 0.025)[-3],
+             `97.5%` = apply(samples, 2, quantile, probs = 0.975)[-3], 
+             check.names = FALSE) %>% 
+    kable() %>% 
+    print()
+  cat("\n")
+}
+
+```
+a. Shown above are 6 tables of the posterior mean, sd, and 95% confidence interval across different values of precision for `beta`. 
+b. As the prior precision goes to $\infty$, the posterior mean is going to be *shrunken* to one (which is the prior mean), and the sd will also approach zero. 
+c. As the prior precision goes to zero, the posterior distribution of `beta` is going to be dictated by the data, and hence the posterior will center around 0.8. 

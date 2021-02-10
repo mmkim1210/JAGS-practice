@@ -1,0 +1,187 @@
+---
+title: "Biostat 234: Lab 2"
+author: "Minsoo Kim"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(R2jags)
+library(lattice)
+set.seed(1234)
+
+housing <- read.table("data.txt")
+colnames(housing) <- c("cost", "eaves", "windows", "yard", "roof")
+y <- housing[, 1]
+x <- as.matrix(housing[, 2:5])
+```
+
+## Question 1
+```{r, message = FALSE, warning = FALSE, error = FALSE, out.width = "50%"}
+# Define three different priors
+dataA <- list(N = 21, K = 4, m = c(1.6053, 1.2556, 2.3413, 3.6771), 
+              prec = c(.2164, .1105, .2061, .1337), tau.a = 17,
+              tau.b = 1128, mbeta0 = -5.682, precbeta0 = .05464, x = x, y = y)
+
+dataB <- list(N = 21, K = 4, m = c(1.6053, 1.2556, 2.3413, 3.6771), 
+              prec = c(.02774, .014160, .02642, .01714), tau.a = 2.1795,
+              tau.b = 144.6, mbeta0 = -5.682, precbeta0 = .007005, x = x, y = y)
+
+dataC <- list(N = 21, K = 4, m = c(1.6053, 1.2556, 2.3413, 3.6771), 
+              prec = c(.005549, .002832, .005284, .003428), tau.a = .4359,
+              tau.b = 28.92, mbeta0 = -5.682, precbeta0 = .00140, x = x, y = y)
+
+# Define initial values
+inits <- rep(list(list(beta0 = 0, beta = c(1, 1, 1, 1), tau = 1, futureobs = 10)), 5)
+
+parameters <- c("beta0", "beta" , "tau", "sigma", 
+                "futurefit", "futureobs", "futuretail")
+
+# Function that summarizes posterior distribution
+mysummary = function(invector) {
+  c(mean = mean(invector), 
+    sd = sd(invector), 
+    quantile(invector, .025), 
+    quantile(invector, .975),
+    `> 0` = sum(invector > 0) / length(invector))
+}  
+
+df.roof <- data.frame()
+
+# Run JAGS for three different priors
+for (i in c("A", "B", "C")) {
+  sink("housingmodel.txt")
+  cat("
+  model
+  { 
+  for(i in 1:N) {
+  y[i] ~ dnorm(mu[i], tau)
+  mu[i] <- beta0 + inprod(x[i, ], beta[])
+  }
+  
+  beta0 ~ dnorm(mbeta0, precbeta0)
+  
+  for (j in 1:K) {
+  beta[j] ~ dnorm(m[j], prec[j])
+  }
+  
+  tau ~ dgamma(tau.a, tau.b)
+  sigma <- 1 / sqrt(tau)
+  
+  futurefit <- beta0 + beta[1] + beta[2] + beta[3] * 2 + beta[4] * 2
+  futureobs ~ dnorm(futurefit, tau)
+  futuretail <- beta0 + beta[1] + beta[2] + beta[3] * 2 + beta[4] * 2 + 1.645 * sigma
+  }
+  ", fill = TRUE)
+  sink()
+  
+  cat("For model ", i, ", \n", sep = "")
+  lab2.sim <- jags(eval(as.symbol(paste0("data", i))), inits, parameters, 
+                   "housingmodel.txt", n.chains = 5, n.iter = 5100, 
+                   n.burnin = 100, n.thin = 1, DIC = FALSE)
+  
+  temp2 <- lab2.sim$BUGSoutput$sims.matrix
+  
+  interceptbeta <- temp2[, 5]
+  eavesbeta <- temp2[, 1]
+  windowsbeta <- temp2[, 2]
+  yardbeta <- temp2[, 3]
+  roofbeta <- temp2[, 4]
+  tau <- temp2[, 10]
+  
+  df.roof <- rbind(df.roof, mysummary(roofbeta))
+
+  # Print summary table
+  print(t(round(apply(temp2, 2, mysummary), 2)))
+  
+  # Plot pairwise scatterplot
+  print(splom(temp2[, 1:5], pch = "."))
+  
+  # Plot posterior
+  plot(density(yardbeta), main = "Housing Data Posteriors", 
+       xlab = "Regression Coefficient", ylab = "Density", 
+       xlim = c(-5, 10), ylim = c(0, 0.42))
+  lines(density(eavesbeta), col = "blue")
+  lines(density(windowsbeta), col = "red")
+  lines(density(roofbeta), col = "green")
+  
+  cat("\n")
+}
+```
+As we move from prior A to B to C, the posterior of all the parameters deviate more strongly from the prior mean that we specified. In other words, as we use more non-informative priors, the posterior is influenced more strongly by the data. 
+
+## Question 2
+```{r}
+colnames(df.roof) <- c("mean", "sd", "2.5%", "97.5%", "> 0")
+rownames(df.roof) <- c("prior A", "prior B", "prior C")
+df.roof
+```
+As we change from prior A to B to C, we have less informative prior, hence rely more on the data for estimation and inference, and since there is no variability in `roof` values in the current data, it becomes harder to estimate its effect, so there is increased variance in its posterior distribution.
+
+## Question 3
+```{r}
+ t(round(apply(temp2, 2, mysummary), 2))[6:8, ]
+```
+Shown above is the summary of the `futurefit`, `futureobs`, `futuretail` for prior C for the house in perfect condition. 
+
+```{r}
+for (i in c("C")) {
+  sink("housingmodel.txt")
+  cat("
+  model
+  { 
+  for(i in 1:N) {
+  y[i] ~ dnorm(mu[i], tau)
+  mu[i] <- beta0 + inprod(x[i, ], beta[])
+  }
+  
+  beta0 ~ dnorm(mbeta0, precbeta0)
+  
+  for (j in 1:K) {
+  beta[j] ~ dnorm(m[j], prec[j])
+  }
+  
+  tau ~ dgamma(tau.a, tau.b)
+  sigma <- 1 / sqrt(tau)
+  
+  futurefit <- beta0 + beta[1] * 3 + beta[2] * 3.33 + beta[3] * 4 + beta[4] * 2
+  futureobs ~ dnorm(futurefit, tau)
+  futuretail <- beta0 + beta[1] * 3 + beta[2] * 3.33 + beta[3] * 4 + beta[4] * 2 
+    + 1.645 * sigma
+  }
+  ", fill = TRUE)
+  sink()
+  
+  cat("For model ", i, ", \n", sep = "")
+  lab2.sim <- jags(eval(as.symbol(paste0("data", i))), inits, parameters, 
+                   "housingmodel.txt", n.chains = 5, n.iter = 5100, 
+                   n.burnin = 100, n.thin = 1, DIC = FALSE)
+  
+  temp2 <- lab2.sim$BUGSoutput$sims.matrix
+  
+  # Print summary table
+  print(t(round(apply(temp2, 2, mysummary), 2))[6:8, ])
+  cat("\n")
+}
+```
+The house with the worst condition has `eaves = 3`, `windows = 3.3`, `yard = 4`, `roof = 2` with `cost = 25.615`. Fitting our model with prior C yields the above cost estimate with corresponding 95% credible interval (`futureobs`) that contains the actual observed cost, suggesting that our model is a reasonable choice based on this posterior predictive check.
+
+## Question 4
+As seen in pairwise scatterplot for Question 1, the intercept and `roof` terms have the highest posterior correlation, because they are in fact perfectly correlated (i.e. colinear) in the data.
+
+## Question 5
+`futurefit` is the predicted cost of housing with estimated parameters. `futureobs` is the predicted cost with sampling error based on estimated parameters. `futuretail` is the upper limit (90% credible interval) of the predicted cost.  
+
+## Question 6
+Suppose we pool the two data sets after the inflation correction. Since the cost is already in the unit of \$1000, and we do not standardize or center the dependent variables, the intercept can be interpreted as the cost of housing when the ratings are all zero (even though that is not actually possible). As we do not know a priori the cost of housing when the ratings are zero, and the cost could be negative in fact, we assign a weak prior on the intercept term as below. For the other regression coefficients, since we believe that each unit increase in rating scale ought to increase the cost by around \$1000, we also assign weakly informative prior as below centered around 1. 
+
+\begin{eqnarray*}
+  y \mid \beta, \sigma^2 &\sim& N(X \beta, \sigma^2 \text{I}) \\
+  \beta_0 &\sim& N(0, 20) \\
+  \beta_1 &\sim& N(1, 4) \\
+  \beta_2 &\sim& N(1, 4) \\
+  \beta_3 &\sim& N(1, 4) \\
+  \beta_4 &\sim& N(1, 4) \\
+  \sigma^2 &\sim& \text{InverseGamma}(8, 5)
+\end{eqnarray*}
