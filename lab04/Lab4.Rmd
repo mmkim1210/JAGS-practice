@@ -1,0 +1,301 @@
+---
+title: "Biostat 234: Lab 4"
+author: "Minsoo Kim"
+date: "`r Sys.Date()`"
+output:
+  bookdown::pdf_document2:
+    toc: false
+    number_sections: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+rm(list = ls())
+options(stringsAsFactors = FALSE)
+
+library(R2jags)
+library(lattice)
+library(tidyverse)
+library(knitr)
+library(kableExtra)
+
+set.seed(1234)
+
+# Load data
+load("lab4_data.RData")
+
+# Define function that parses sims.array of JAGS output based on input burnin and n.thin
+AddBurnin <- function(sims.array, burnin, n.thin) {
+	nchains <- dim(sims.array)[2]
+	end <- dim(sims.array)[1]
+	start <- burnin / n.thin + 1
+	sims.matrix <- sims.array[start:end, 1, ]
+	if (nchains > 1) {
+		for (k in 2:nchains) {
+			sims.matrix <- rbind(sims.matrix, sims.array[start:end, k, ])
+		}
+	}
+	
+	Output.Matrix <- mat.or.vec(dim(sims.matrix)[2], 5)
+	
+	for (q in 1:dim(sims.matrix)[2]) {
+		Output.Matrix[q, 1] <- mean(sims.matrix[, q])
+		Output.Matrix[q, 2] <- sd(sims.matrix[, q])
+		Output.Matrix[q, 3] <- quantile(sims.matrix[, q], .025)
+		Output.Matrix[q, 4] <- quantile(sims.matrix[, q], .975)	
+		Output.Matrix[q, 5] <- sum(sims.matrix[, q] > 0) / length(sims.matrix[, q])
+	}
+	
+	rownames(Output.Matrix) <- colnames(sims.matrix)
+	colnames(Output.Matrix) <- c("mu.vect", "sd.vect", "2.5%", "97.5%", "P>0")
+	
+	JAGS.Result <- list(Burnin.sims.array = sims.array,
+	                    Burnin.sims.matrix = sims.matrix,
+	                    Burnin.Summary = Output.Matrix)
+	return(JAGS.Result)
+}
+
+# Define function that returns summary statistics of posterior samples
+mysummary = function(invector) {
+  c(mean = mean(invector), 
+    sd = sd(invector), 
+    quantile(invector, .025), 
+    quantile(invector, .975),
+    `P > 0` = sum(invector > 0) / length(invector))
+} 
+
+# Create JAGS model 
+{
+sink("lab4model.txt")
+cat("
+model
+{               
+  for(i in 1:64) {
+    for(j in 1:4) {
+      s[i, j] <- 4 * (i-1)+j
+      y[i, j] ~ dnorm(mu[i, j], tau.e)
+      mu[i, j] <- inprod(x[s[i, j], ], alpha[]) + beta[i]
+    }
+    beta[i] ~ dnorm(0, tau.b)
+  }
+  
+  for(k in 1:8) {
+    alpha[k] ~ dnorm(m[k], varinv[k])
+    alphasign[k] <- step(alpha[k])
+  }
+
+  tau.e ~ dgamma(ea, eb)
+  tau.b ~ dgamma(ba, bb)
+  
+  sigma <- 1 / sqrt(tau.e)
+  sqrtD <- 1 / sqrt(tau.b)
+  rho <- sqrtD * sqrtD / (sigma * sigma + sqrtD * sqrtD)
+}", fill = TRUE)
+sink()
+}
+
+# Initial JAGS run
+proc.time()
+run1 <- jags(priordata, inits, parameters, "lab4model.txt", n.chains = 5, 
+             n.iter = 1100, n.burnin = 0, n.thin = 1)
+proc.time()  # 1100 iterations takes about 3 s, and 11000 iterations about 15 s  
+
+names(run1)
+Output1 <- AddBurnin(run1$BUGSoutput$sims.array, 
+                     burnin = 100, 
+                     n.thin = 1)
+
+print(Output1$Burnin.Summary)
+
+# Second JAGS run with larger iterations
+run2 <- jags(priordata, inits, parameters, "lab4model.txt", n.chains = 5, 
+             n.iter = 5100, n.burnin = 0, n.thin = 1, DIC = TRUE)
+
+names(run2)
+
+Output2 <- AddBurnin(run2$BUGSoutput$sims.array, burnin = 100, n.thin = 1)
+
+print(Output2$Burnin.Summary)
+
+posterior_normal <- Output2$Burnin.sims.matrix  # posterior samples
+dim(posterior_normal)
+
+# Summary table of posterior samples
+t(round(apply(posterior_normal, 2, mysummary), 2)) %>% kable()
+```
+
+# Question 1
+
+We model the prior for error and random intercept terms with $t$ densities. We run `JAGS` 5,100 iterations each for 5 chains with 100 iterations for burn-in, resulting in total 25,000 iterations.
+
+```{r prior-t}
+{
+sink("lab4model-tprior.txt")
+cat("
+model
+{               
+  for(i in 1:64) {
+    for(j in 1:4) {
+      s[i, j] <- 4 * (i-1)+j
+      y[i, j] ~ dt(mu[i, j], tau.e, dfy)
+      mu[i, j] <- inprod(x[s[i, j], ], alpha[]) + beta[i]
+    }
+    beta[i] ~ dt(0, tau.b, dfbeta)
+  }
+  
+  for(k in 1:8) {
+    alpha[k] ~ dnorm(m[k], varinv[k])
+    alphasign[k] <- step(alpha[k])
+  }
+  
+  tau.e ~ dgamma(ea, eb)
+  tau.b ~ dgamma(ba, bb)
+  
+  sigma <- 1 / sqrt(tau.e)
+  sqrtD <- 1 / sqrt(tau.b)
+  rho <- sqrtD * sqrtD / (sigma * sigma + sqrtD * sqrtD)
+  
+  invdfy ~ dunif(0, 0.5)
+  dfy <- 1 / invdfy
+  
+  invdfbeta ~ dunif(0, 0.5)
+  dfbeta <- 1 / invdfbeta
+}", fill = TRUE)
+sink()
+}
+
+parameters <- c(parameters, "dfbeta", "dfy")  # add these parameters to track
+run3 <- jags(priordata, inits, parameters, "lab4model-tprior.txt", n.chains = 5, 
+             n.iter = 5100, n.burnin = 0, n.thin = 1, DIC = TRUE)
+```
+
+```{r autocorrelation, echo=FALSE, fig.cap="Autocorrelation plot for sqrtD, sigma", fig.align='center'}
+Output3 <- AddBurnin(run3$BUGSoutput$sims.array, burnin = 100, n.thin = 1)
+posterior_t <- Output3$Burnin.sims.matrix  # posterior samples
+temp <- Output3$Burnin.sims.array  # posterior samples by chain
+
+par(mfrow = c(2, 1))
+par(mar = c(3.1, 4.1, 2.1, 2.1))
+
+acf(temp[, 1, 26], main = "", lag.max = 300)  # posterior samples for 1st chain
+mtext("sqrtD", side = 3, line = 1, cex = 0.8)
+acf(temp[, 1, 25], main = "", lag.max = 300) 
+mtext("sigma", side = 3, line = 1, cex = 0.8)
+```
+
+```{r time-series, echo=FALSE, fig.cap="Time-series plot for sqrtD, sigma"}
+par(mfrow = c(2,1))
+par(mar = c(4.1, 4.1, 2.1, 2.1))
+
+plot(1:length(temp[, 1, 26]), temp[, 1, 26], type = "l", xlab = "iteration", ylab = "")  
+mtext("sqrtD", side = 3, line = 1, cex = 0.8)
+plot(1:length(temp[, 1, 25]), temp[, 1, 25], type = "l", xlab = "iteration", ylab = "")  
+mtext("sigma", side = 3, line = 1, cex = 0.8)
+```
+
+`JAGS` output is less than ideal, but not the worst, since the autocorrelation and time-series plot for two parameters (Figures \@ref(fig:autocorrelation), \@ref(fig:time-series)) exhibit correlation even after a significant number of lags and some semblance of caterpillar shape, respectively.
+
+```{r t-table, echo=FALSE}
+# Summary table of posterior samples
+t(round(apply(posterior_t, 2, mysummary), 2)) %>% 
+  kable(caption = "Summary statistics for posterior distribution (t model)",
+        align = "lrc") %>% 
+  kable_styling(position = "center")
+```
+
+Table \@ref(tab:t-table) shows summary statistics for fixed and random effects, including the two degrees of freedom parameters.
+
+# Question 2
+
+```{r normal-table, echo=FALSE}
+# Summary table of posterior samples
+t(round(apply(posterior_normal, 2, mysummary), 2)) %>% 
+  kable(caption = "Summary statistics for posterior distribution (normal model)",
+        align = "lrc") %>% 
+  kable_styling(position = "center")
+```
+
+When comparing Tables \@ref(tab:t-table) and \@ref(tab:normal-table), particularly alpha's, it is noticeable that although the sign of effect is consistent between these two models, the relative magnitude of effect changes. That is, distraction of attenders (alpha[4]) has the highest effect among attenders, while attending of attenders (alpha[3]) has the highest effect in the normal model. This result is visualized in Figure \@ref(fig:treatment).
+
+# Question 3
+
+Figures \@ref(fig:prediction-subject4), \@ref(fig:baseline), \@ref(fig:treatment), \@ref(fig:treatment2), and \@ref(fig:treatment3) visualize couple distributions of posterior samples. 
+
+```{r prediction-subject4, echo=FALSE, fig.cap="Prediction for subject 4's missing observations"}
+plot(density((posterior_t[, 30])), main = "", 
+     xlab = "log seconds", ylab = "Density", col = "green", xlim = c(0, 5))
+lines(density((posterior_t[, 31])), lty = 2, col = "blue")
+legend(3.7, 0.7, c("y[4,4]", "y[4,3]"), lty = c(2, 1), col = c("blue", "green"))
+```
+
+```{r baseline, echo=FALSE, fig.cap="Baseline predicted pain tolerance"}
+plot(density(exp(posterior_t[, 1] + posterior_t[, 2]), bw = 1), main = "", 
+		xlab = "seconds", ylab = "Density", col = "green", lty = 2, ylim = c(0,.15))
+lines(density(exp(posterior_t[, 1]), bw = 1), lty = 1, col = "blue")
+legend(37, .15, c("Attender", "Distracter"), lty = c(1, 2), col = c("blue", "green"))
+```
+
+```{r treatment, echo=FALSE, fig.cap="Treatment effects (log scale)"}
+par(mfrow = c(1, 2))
+plot(density(posterior_t[, 3]), col = "red", lty = 1, xlab = "Attenders", 
+     xlim = c(-1, 1), ylim = c(0, 4), main = "")
+lines(density(posterior_t[, 4]), lty = 2, col = "blue" )
+lines(density(posterior_t[, 5]), lty = 3, col = "green")
+legend(0.275, 3.75, legend = c("Attend", "Distract", "Null"), col = c("red", "blue", "green"), 
+       lty = 1:3, cex = 0.5)
+
+plot(density(posterior_t[, 6]), col = "red", lty = 1, xlab = "Distracters",
+     xlim = c(-1, 1), ylim = c(0, 4), main = "")
+lines(density(posterior_t[, 7]), lty = 2, col = "blue" )
+lines(density(posterior_t[, 8]), lty = 3, col = "green")
+legend(0.275, 3.75, legend = c("Attend", "Distract", "Null"), col = c("red", "blue", "green"), 
+       lty = 1:3, cex = 0.5)
+```
+
+```{r treatment2, echo=FALSE, fig.cap="Treatment effects (multiplicative scale)"}
+par(mfrow = c(1, 2))
+plot(density(exp(posterior_t[, 3])), col = "red", lty = 1, xlab = "Attenders", 
+     xlim = c(0, 2.5), ylim = c(0, 4.5), main = "")
+lines(density(exp(posterior_t[, 4])), lty = 2, col = "blue" )
+lines(density(exp(posterior_t[, 5])), lty = 3, col = "green")
+legend(1.5, 3.75, legend = c("Attend", "Distract", "Null"), col = c("red", "blue", "green"), 
+       lty = 1:3, cex = 0.5)
+
+plot(density(exp(posterior_t[, 6])), col = "red", lty = 1, xlab = "Distracters",
+     xlim = c(0, 2.5), ylim = c(0, 4.5), main = "")
+lines(density(exp(posterior_t[, 7])), lty = 2, col = "blue" )
+lines(density(exp(posterior_t[, 8])), lty = 3, col = "green")
+legend(1.5, 3.75, legend = c("Attend", "Distract", "Null"), col = c("red", "blue", "green"), 
+       lty = 1:3, cex = 0.5)
+```
+
+```{r treatment3, echo=FALSE, fig.cap="Pairwise differences between treatments (log scale)"}
+par(mfrow = c(1, 2))
+plot(density(posterior_t[, 4] - posterior_t[, 3], bw = 0.1), main = "", 
+     xlab = "Attenders", ylab = "Density", col = "blue", 
+     lty = 1, xlim = c(-1, 1.5), ylim = c(0, 2.25))
+lines(density(posterior_t[, 4] - posterior_t[, 5], bw = 0.1), lty = 2, col = "green")
+lines(density(posterior_t[, 3] - posterior_t[, 5], bw = 0.1), lty = 3, col = "red")
+legend(0.7, 2.0, c("D - A", "D - N", "A - N"), lty = c(1, 2, 3), 
+       col = c( "blue", "green", "red"), cex = 0.5)
+abline(v = 0, col = "lightgrey")
+
+plot(density(posterior_t[, 7] - posterior_t[, 6], bw = 0.1), main = "", 
+     xlab = "Distracters", ylab = "Density", col = "blue", 
+     lty = 1, xlim = c(-1, 1.5), ylim = c(0, 2.25))
+lines(density(posterior_t[, 7] - posterior_t[, 8], bw = 0.1), lty = 2, col = "green")
+lines(density(posterior_t[, 6] - posterior_t[, 8], bw = 0.1), lty = 3, col = "red")
+legend(0.7, 2.0, c("D - A", "D - N", "A - N"), lty = c(1, 2, 3), 
+       col = c( "blue", "green", "red"), cex = 0.5)
+abline(v = 0, col = "lightgrey")
+title("Treatment Effect Differences", outer = TRUE, line = -3.5)
+```
+
+# Question 4
+
+Other priors possible for df's are InverseGamma and half-normal distributions, among others, that take non-negative values. These priors could be better than the inverse of uniform distribution  used here, since the mean actually exists for these distributions, and we can constrain the degrees of freedom to smaller ranger of values.
+
+# Question 5
+
+$t$ model seems to fit better, as the posterior means for df parameters are not 'too large' as in Table \@ref(tab:t-table), indicating that it is not ideal to approximate this $t$ distribution by normal distribution. We can also use DIC to compare models. The $t$ model has smaller DIC value (Tables \@ref(tab:t-table), \@ref(tab:normal-table)) suggesting that it fits the data better.
