@@ -1,0 +1,172 @@
+---
+title: "Biostat 234: HW 1"
+author: "Minsoo Kim"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+set.seed(1234)
+library(tidyverse)
+library(knitr)
+library(glue)
+```
+
+# Problem 1
+
+## Question 1
+I measured my diastolic blood pressure (DBP) for 10 consecutive days at nine in the morning. 
+
+## Question 2
+\begin{eqnarray*}
+  y \mid \mu \sim N(\mu, \sigma^2) \\
+  \mu \sim N(\mu_0, \tau^2)
+\end{eqnarray*}
+
+Assuming that DBP ($y$) is normally distributed, I define my prior of its mean is as $N(80, 25)$, where $\mu_0 = 80$ and $\tau^2 = 25$. This is a reasonable prior given that multiple measurement of my DBP couple years ago in medical school always fell in the range of [70, 90]. 
+
+## Question 3
+```{r, include=FALSE}
+data <- c(70, 75, 78, 68, 76, 70, 66, 75, 72, 72)
+```
+10 day measurement of my DBP was 70, 75, 78, 68, 76, 70, 66, 75, 72, and 72. mean and sample variance of these measurements are `r mean(data)` and `r var(data)`, respectively. 
+
+## Question 4
+I use $\sigma^2$ = `r var(data)` for subsequent analyses. 
+
+## Question 5
+$\overline{\mu} = \left(\frac{n}{\sigma^2} + \frac{1}{\tau^2} \right)^{-1} \left(\frac{n \overline{y}}{\sigma^2} + \frac{\mu_0}{\tau^2} \right)$ = $\left(\frac{10}{14.4} + \frac{1}{25} \right)^{-1} \left(\frac{10 \cdot 72.2}{14.4} + \frac{80}{25} \right)$ = `r (1 / (length(data) / var(data) + 1 / 25) * (length(data) * mean(data) / var(data) + 80 / 25)) %>% signif(3)`
+
+$V = \frac{\tau^2 \sigma^2 / n}{\tau^2 + \sigma^2 / n}$ = $\frac{25 \cdot 14.4 / 10}{25 + 14.4 / 10}$ = `r ((25 * var(data) / length(data)) / (25 + var(data) / length(data))) %>% signif(3)`
+
+## Question 6
+\begin{eqnarray*}
+  y \sim N(\mu_0, \sigma^2 + \tau^2)
+\end{eqnarray*}
+
+## Question 7
+```{r}
+df <- data.frame(mean = c(80, 72.6, 80, 72.2),
+                 sd = signif(c(sqrt(25), sqrt(1.36), sqrt(25 + 14.4), sqrt(14.4/10)), 3),
+                 var = signif(c(25, 1.36, 25 + 14.4, 14.4 / 10), 3))
+rownames(df) <- c("prior", "posterior", "prior predictive", "likelihood")
+kable(df)
+
+#library(DT)
+#df %>% datatable() # interactive table in HTML
+#library(gt)
+#df %>% gt()
+```
+
+## Question 8
+```{r}
+x <- seq(50, 110, length.out = 500)
+df <- data.frame(x = x,
+                 prior = dnorm(x, 80, sqrt(25)),
+                 posterior = dnorm(x, 72.6, sqrt(1.36)),
+                 `prior predictive` = dnorm(x, 80, sqrt(25 + 14.4)),
+                 likelihood = dnorm(x, 72.2, sqrt(14.4 / 10)), 
+                 check.names = FALSE)
+
+df %>% gather(prior, posterior, `prior predictive`, likelihood, 
+               key = "pdf", value = "value") %>% 
+  ggplot(aes(x, y = value, color = pdf)) +
+  geom_line() + 
+  labs(x = "Blood pressure", y = "Probability density")
+```
+The likelihood for $\mu$ is centered around the data mean and the posterior is in between the likelihood and prior distribution as expected. The posterior is closer to likelihood suggesting that more information comes from the data. The prior predictive density for single observation has higher variance than prior since there is uncertainty at two levels, in the prior and in the generative model (i.e. sampling density). 
+
+# Problem 2
+
+## Question 1
+The support for all four cases ranges from zero to $\infty$. 
+
+## Question 2
+Parameter `b` acts like a prior sample size. 
+
+## Question 3
+I counted the number of words in the first paragraph of 5 different papers that I am currently reading. They are all from the same journal `Nature Communications` such that inference is made on the population of papers published in this journal.   
+
+## Question 4
+```{r}
+data <- c(153, 120, 143, 140, 100)
+```
+The number of words in the first paragraph in 5 different papers published in the same journal were 153, 151, 143, 140, and 148. 
+
+## Question 5
+Setting $m_0 = 136$, $s_0 = 20$, $n_0 = 1$, we have $a_1 = 46.24$, $b_1 = 0.34$ and $a_1 = 136$, $b_1 = 1$
+
+## Question 6
+First method would be to discard one prior and go with the remaining one. Second method would be to look for other external information or relevant literature to combine prior information, but this is also a question I have in general that I would like to ask the professor. 
+
+## Question 7
+Already answered in `Question 3`. 
+
+## Question 8
+\begin{eqnarray*}
+  \lambda_1 \mid y \sim \text{Gamma}(46.24 + 656, 0.34 + 5) \\
+  \lambda_2 \mid y \sim \text{Gamma}(136 + 656, 1 + 5) \\
+\end{eqnarray*}
+
+## Question 9
+Posterior mean and standard deviation are `r (46.24 + 656)/(0.34 + 5) %>% signif(3)` and `r sqrt((46.24 + 656)/(0.34 + 5)^2) %>% signif(3)` for the first prior, while they are `r (136 + 656)/(1 + 5) %>% signif(3)` and `r sqrt((136 + 656)/(1 + 5)^2) %>% signif(3)` for the second prior. 
+
+## Question 10
+```{r}
+x <- seq(0, 200, length.out = 400)
+df <- data.frame(x = x,
+                 prior1 = dgamma(x, shape = 46.24, rate = 0.34),
+                 prior2 = dgamma(x, shape = 136, rate = 1))
+
+df %>% 
+  gather(prior1, prior2, key = "pdf", value = "value") %>% 
+  ggplot(aes(x, y = value, color = pdf)) +
+  geom_line() + 
+  labs(x = "Word count in the first paragraph", y = "Probability density")
+```
+Prior 2 has smaller variance than prior 1, which is reasonable given that they were constructed in two different manners. Both distribution are unimodal and centered around similar mode. 
+
+```{r}
+x <- seq(0, 200, length.out = 400)
+df <- data.frame(x = x,
+                 posterior1 = dgamma(x, shape = 46.24 + 656, rate = 0.34 + 5),
+                 posterior2 = dgamma(x, shape = 136 + 656, rate = 1 + 5))
+
+df %>% 
+  gather(posterior1, posterior2, key = "pdf", value = "value") %>% 
+  ggplot(aes(x, y = value, color = pdf)) +
+  geom_line() + 
+  labs(x = "Word count in the first paragraph", y = "Probability density")
+```
+Posterior distribution for two priors look pretty much the same, indicating that the data has given much information and dictated the posterior distribution. 
+
+## Question 11
+```{r}
+x <- seq(0, 200, length.out = 400)
+df <- data.frame(x = x,
+                 prior1 = dgamma(x, shape = 46.24, rate = 0.34),
+                 posterior1 = dgamma(x, shape = 46.24 + 656, rate = 0.34 + 5))
+
+df %>% 
+  gather(prior1, posterior1, key = "pdf", value = "value") %>% 
+  ggplot(aes(x, y = value, color = pdf)) +
+  geom_line() + 
+  labs(x = "Word count in the first paragraph", y = "Probability density") +
+  ggtitle("First prior and its posterior")
+```
+
+```{r}
+x <- seq(0, 200, length.out = 400)
+df <- data.frame(x = x,
+                 prior2 = dgamma(x, shape = 136, rate = 1),
+                 posterior2 = dgamma(x, shape = 136 + 656, rate = 1 + 5))
+
+df %>% 
+  gather(prior2, posterior2, key = "pdf", value = "value") %>% 
+  ggplot(aes(x, y = value, color = pdf)) +
+  geom_line() + 
+  labs(x = "Word count in the first paragraph", y = "Probability density") +
+  ggtitle("Second prior and its posterior")
+```
+For both cases, the posterior distribution is much sharper than prior with smaller variance than prior, and its mode is closer to the data mean. 

@@ -11,9 +11,38 @@ library(R2jags)
 library(lattice)
 set.seed(1234)
 
-load("AddBurnin.RData")
+# Define function that parses sims.array of JAGS output based on input burnin and n.thin
+AddBurnin <- function(sims.array, burnin, n.thin) {
+	nchains <- dim(sims.array)[2]
+	end <- dim(sims.array)[1]
+	start <- burnin / n.thin + 1
+	sims.matrix <- sims.array[start:end, 1, ]
+	if (nchains > 1) {
+		for (k in 2:nchains) {
+			sims.matrix <- rbind(sims.matrix, sims.array[start:end, k, ])
+		}
+	}
+	
+	Output.Matrix <- mat.or.vec(dim(sims.matrix)[2], 5)
+	
+	for (q in 1:dim(sims.matrix)[2]) {
+		Output.Matrix[q, 1] <- mean(sims.matrix[, q])
+		Output.Matrix[q, 2] <- sd(sims.matrix[, q])
+		Output.Matrix[q, 3] <- quantile(sims.matrix[, q], .025)
+		Output.Matrix[q, 4] <- quantile(sims.matrix[, q], .975)	
+		Output.Matrix[q, 5] <- sum(sims.matrix[, q] > 0) / length(sims.matrix[, q])
+	}
+	
+	rownames(Output.Matrix) <- colnames(sims.matrix)
+	colnames(Output.Matrix) <- c("mu.vect", "sd.vect", "2.5%", "97.5%", "P>0")
+	
+	JAGS.Result <- list(Burnin.sims.array = sims.array,
+	                    Burnin.sims.matrix = sims.matrix,
+	                    Burnin.Summary = Output.Matrix)
+	return(JAGS.Result)
+}
 
-# Function that summarizes posterior distribution
+# Define function that returns summary statistics of posterior samples
 mysummary = function(invector) {
   c(mean = mean(invector), 
     sd = sd(invector), 
@@ -37,23 +66,25 @@ Xobs <- as.matrix(data[7:306, 3:8])
 Yobs <- data[7:306, 1]
 nobs <- data[7:306, 2]
 
-#sink("priors.txt")
-#cat("
-#  model{
-#  	betas <- invXp %*% logitp[]
-#  
-#  	for (j in 1:6) {
-#  		logitp[j] <- logit(pie[j])
-#  	}
-#  	pie[1] ~ dbeta(1.1, 8.5)
-#  	pie[2] ~ dbeta(3.0, 11.0)
-#  	pie[3] ~ dbeta(5.9, 1.7)
-#  	pie[4] ~ dbeta(1.3, 12.9)
-#  	pie[5] ~ dbeta(1.1, 4.9)
-#  	pie[6] ~ dbeta(1.5, 5.5)
-#  }
-#  ", fill = TRUE)
-#sink()
+{
+sink("priors.txt")
+cat("
+  model{
+  	betas <- invXp %*% logitp[]
+  
+  	for (j in 1:6) {
+  		logitp[j] <- logit(pie[j])
+  	}
+  	pie[1] ~ dbeta(1.1, 8.5)
+  	pie[2] ~ dbeta(3.0, 11.0)
+  	pie[3] ~ dbeta(5.9, 1.7)
+  	pie[4] ~ dbeta(1.3, 12.9)
+  	pie[5] ~ dbeta(1.1, 4.9)
+  	pie[6] ~ dbeta(1.5, 5.5)
+  }
+  ", fill = TRUE)
+sink()
+}
 
 ex1.data <- list(invXp = invXp)
 ex1.inits <- rep(list(list(pie = c(0.5, 0.5, 0.5, 0.5, 0.5, 0.5))), 5)
@@ -65,28 +96,30 @@ ex1.out <- jags(ex1.data, ex1.inits, ex1.parameters, "priors.txt",
 Output1 <- AddBurnin(ex1.out$BUGSoutput$sims.array, burnin = 1000, n.thin = 2)
 #print(Output1$Burnin.Summary)
 
-#sink("posteriors.txt")
-#cat("
-#  model{
-#  	betas <- invXp %*% logitp[]
-#
-#  	for (j in 1:6) {
-#  		logitp[j] <- logit(pie[j])
-#  	}
-#  	pie[1] ~ dbeta(1.1, 8.5)
-#  	pie[2] ~ dbeta(3.0, 11.0)
-#  	pie[3] ~ dbeta(5.9, 1.7)
-#  	pie[4] ~ dbeta(1.3, 12.9)
-#  	pie[5] ~ dbeta(1.1, 4.9)
-#  	pie[6] ~ dbeta(1.5, 5.5)
-#  	
-#  	for(i in 1:T) {
-#  	  y[i] ~ dbern(p[i])
-#  	  p[i] <- ilogit(inprod(x[i, ], betas[]))
-#  	}
-#  }
-#  ", fill = TRUE)
-#sink()
+{
+sink("posteriors.txt")
+cat("
+  model{
+  	betas <- invXp %*% logitp[]
+
+  	for (j in 1:6) {
+  		logitp[j] <- logit(pie[j])
+  	}
+  	pie[1] ~ dbeta(1.1, 8.5)
+  	pie[2] ~ dbeta(3.0, 11.0)
+  	pie[3] ~ dbeta(5.9, 1.7)
+  	pie[4] ~ dbeta(1.3, 12.9)
+  	pie[5] ~ dbeta(1.1, 4.9)
+  	pie[6] ~ dbeta(1.5, 5.5)
+  	
+  	for(i in 1:T) {
+  	  y[i] ~ dbern(p[i])
+  	  p[i] <- ilogit(inprod(x[i, ], betas[]))
+  	}
+  }
+  ", fill = TRUE)
+sink()
+}
 
 ex2.data <- list(x = Xobs, y = Yobs, T = 300, invXp = invXp)
 ex2.inits <- rep(list(list(pie = c(0.5, 0.5, 0.5, 0.5, 0.5, 0.5))), 5)
@@ -172,7 +205,7 @@ df %>% select(`beta1 (T = 300)`, `beta1 (prior)`) %>% gather(key = "beta", value
   ggplot(aes(coefficient, color = beta)) + 
   geom_density() 
 
-df %>% select(`beta2 (T = 300)`, `beta1 (prior)`) %>% gather(key = "beta", value = "coefficient") %>% 
+df %>% select(`beta2 (T = 300)`, `beta2 (prior)`) %>% gather(key = "beta", value = "coefficient") %>% 
   ggplot(aes(coefficient, color = beta)) + 
   geom_density() 
 
@@ -213,7 +246,7 @@ df %>% select(`beta1 (T = 300)`, `beta1 (prior)`, `beta1 (T = 100)`) %>%
   ggplot(aes(coefficient, color = beta)) + 
   geom_density() 
 
-df %>% select(`beta2 (T = 300)`, `beta1 (prior)`, `beta2 (T = 100)`) %>% 
+df %>% select(`beta2 (T = 300)`, `beta2 (prior)`, `beta2 (T = 100)`) %>% 
   gather(key = "beta", value = "coefficient") %>% 
   ggplot(aes(coefficient, color = beta)) + 
   geom_density() 
@@ -246,34 +279,36 @@ $\pi$'s from `JAGS` output are posterior samples of the probability of death for
 
 ## Question 5
 ```{r, echo=TRUE}
-#sink("posteriors2.txt")
-#cat("
-#  model{
-#  	betas <- invXp %*% logitp[]
-#
-#  	for (j in 1:6) {
-#  		logitp[j] <- logit(pie[j])
-#  	}
-#  	pie[1] ~ dbeta(1.1, 8.5)
-#  	pie[2] ~ dbeta(3.0, 11.0)
-#  	pie[3] ~ dbeta(5.9, 1.7)
-#  	pie[4] ~ dbeta(1.3, 12.9)
-#  	pie[5] ~ dbeta(1.1, 4.9)
-#  	pie[6] ~ dbeta(1.5, 5.5)
-#  	
-#  	for(i in 1:T) {
-#  	  y[i] ~ dbern(p[i])
-#  	  p[i] <- ilogit(inprod(x[i, ], betas[]))
-#  	}
-#  	
-#  	futurefit1 <- ilogit(betas[1] + betas[2] * 2 + betas[3] * 7.55 + betas[4] * 25)
-#  	futurefit2 <- ilogit(betas[1] + betas[2] * 11 + betas[3] * 7.8408 + betas[4] * 42 +
-#  	  betas[5] + betas[6] * 42)
-#   futurefit3 <- ilogit(betas[1] + betas[2] * 16 + betas[3] * 7.8408 + betas[4] * 80 +
-#  	  betas[5] + betas[6] * 80)
-#  }
-#  ", fill = TRUE)
-#sink()
+{
+sink("posteriors2.txt")
+cat("
+  model{
+  	betas <- invXp %*% logitp[]
+
+  	for (j in 1:6) {
+  		logitp[j] <- logit(pie[j])
+  	}
+  	pie[1] ~ dbeta(1.1, 8.5)
+  	pie[2] ~ dbeta(3.0, 11.0)
+  	pie[3] ~ dbeta(5.9, 1.7)
+  	pie[4] ~ dbeta(1.3, 12.9)
+  	pie[5] ~ dbeta(1.1, 4.9)
+  	pie[6] ~ dbeta(1.5, 5.5)
+  	
+  	for(i in 1:T) {
+  	  y[i] ~ dbern(p[i])
+  	  p[i] <- ilogit(inprod(x[i, ], betas[]))
+  	}
+  	
+  	futurefit1 <- ilogit(betas[1] + betas[2] * 2 + betas[3] * 7.55 + betas[4] * 25)
+  	futurefit2 <- ilogit(betas[1] + betas[2] * 11 + betas[3] * 7.8408 + betas[4] * 42 +
+  	  betas[5] + betas[6] * 42)
+   futurefit3 <- ilogit(betas[1] + betas[2] * 16 + betas[3] * 7.8408 + betas[4] * 80 +
+  	  betas[5] + betas[6] * 80)
+  }
+  ", fill = TRUE)
+sink()
+}
 
 ex4.data <- list(x = Xobs, y = Yobs, T = 300, invXp = invXp)
 ex4.inits <- rep(list(list(pie = c(0.5, 0.5, 0.5, 0.5, 0.5, 0.5))), 5)
