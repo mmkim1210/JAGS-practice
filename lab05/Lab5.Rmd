@@ -1,0 +1,274 @@
+---
+title: "Biostat 234: Lab 5"
+author: "Minsoo Kim"
+date: "`r Sys.Date()`"
+output:
+  bookdown::pdf_document2:
+    toc: false
+    number_sections: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+rm(list = ls())
+options(stringsAsFactors = FALSE)
+
+library(R2jags)
+library(lattice)
+library(tidyverse)
+library(knitr)
+library(xtable)
+library(kableExtra)
+library("bayesplot")
+library("ggmcmc")
+
+set.seed(1234)
+
+# Set-up data
+metadata <- matrix(data = c(
+    506,     21,    164,     20,
+  20614,    222,   1575,     59,
+  32279,    681,   3051,    212,
+    234,     49,     59,     19,
+    201,     28,     30,     11,
+    568,     60,    116,     19,
+   2035,    130,    549,     43,
+    406,     32,     99,     17,
+   2946,     55,    831,     83), 
+  byrow = TRUE, ncol = 4)
+
+colnames(metadata) <- c("n0.HD", "y0.HD", "n1.HD", "y1.HD")
+xtable(metadata, digits = 0)  # table output in latex format
+
+expit <- function(a) exp(a) / (1 + exp(a))
+logit <- function(a) log(a / (1 - a))
+
+# Define function that parses sims.array of JAGS output based on input burnin and n.thin
+AddBurnin <- function(sims.array, burnin, n.thin) {
+	nchains <- dim(sims.array)[2]
+	end <- dim(sims.array)[1]
+	start <- burnin / n.thin + 1
+	sims.matrix <- sims.array[start:end, 1, ]
+	if (nchains > 1) {
+		for (k in 2:nchains) {
+			sims.matrix <- rbind(sims.matrix, sims.array[start:end, k, ])
+		}
+	}
+	
+	Output.Matrix <- mat.or.vec(dim(sims.matrix)[2], 5)
+	
+	for (q in 1:dim(sims.matrix)[2]) {
+		Output.Matrix[q, 1] <- mean(sims.matrix[, q])
+		Output.Matrix[q, 2] <- sd(sims.matrix[, q])
+		Output.Matrix[q, 3] <- quantile(sims.matrix[, q], .025)
+		Output.Matrix[q, 4] <- quantile(sims.matrix[, q], .975)	
+		Output.Matrix[q, 5] <- sum(sims.matrix[, q] > 0) / length(sims.matrix[, q])
+	}
+	
+	rownames(Output.Matrix) <- colnames(sims.matrix)
+	colnames(Output.Matrix) <- c("mu.vect", "sd.vect", "2.5%", "97.5%", "P>0")
+	
+	JAGS.Result <- list(Burnin.sims.array = sims.array,
+	                    Burnin.sims.matrix = sims.matrix,
+	                    Burnin.Summary = Output.Matrix)
+	return(JAGS.Result)
+}
+
+# Define function that returns summary statistics of posterior samples
+mysummary = function(invector) {
+  c(mean = mean(invector), 
+    sd = sd(invector), 
+    quantile(invector, .025), 
+    quantile(invector, .975),
+    `P > 0` = sum(invector > 0) / length(invector))
+} 
+
+# Meta-analysis model
+{
+sink("syncope1.txt")
+cat("
+    model {
+    for(i in 1:npapers) {
+      y0[i] ~ dbin(pie0[i], n0[i])
+      y1[i] ~ dbin(pie1[i], n1[i])
+      logit(pie0[i]) = alpha + beta[i] - delta[i]/2
+      logit(pie1[i]) = alpha + beta[i] + delta[i]/2
+      beta[i]  ~ dnorm(0 , sigmainv2)
+      delta[i] ~ dnorm(d0, tauinv2)
+      OR[i]    = (pie1[i]/(1 - pie1[i])) / (pie0[i]/(1 - pie0[i]))
+    }
+    alpha ~ dnorm(a, b)
+    d0    ~ dnorm(0, d)
+    sigmainv2 ~ dgamma(c1, c2)
+    tauinv2   ~ dgamma(f1, f2)
+    sigma = 1 / sqrt(sigmainv2)
+    tau   = 1 / sqrt(tauinv2) 
+    }
+    ", fill = TRUE)
+sink()
+}
+
+# Prior parameters
+npapers <- 9
+a <- -2.75
+b <- 1 / 2
+d <- 1 / 2
+c1 = f1 <- 3
+c2 = f2 <- 2
+
+parameters <- c("pie0", "pie1", "alpha", "sigma", "tau", "d0", "OR")
+
+priordata <- list(npapers = npapers, a = a, b = b, 
+                  d = d, c1 = c1, f1 = f1, c2 = c2, 
+                  f2 = f2, y0 = metadata[, 2], 
+                  n0 = metadata[, 1], y1 = metadata[, 4], 
+                  n1 = metadata[, 3])
+
+inits <- rep(list(list(beta = rep(0, npapers),
+                       delta = rep(0, npapers),
+                       alpha = 0, d0 = 0,
+                       sigmainv2 = 1, tauinv2 = 1)), 5)
+
+# Initial JAGS run
+run1 = jags(priordata, inits, parameters, "syncope1.txt", 
+            n.chains = 5, n.iter = 1100, n.burnin = 0, n.thin = 1)
+
+names(run1)
+Output1 <- AddBurnin(run1$BUGSoutput$sims.array, 
+                     burnin = 100, 
+                     n.thin = 1)
+
+print(Output1$Burnin.Summary)
+
+posterior_normal1 <- Output1$Burnin.sims.matrix  # posterior samples
+dim(posterior_normal1)
+
+# Summary table of posterior samples
+t(round(apply(posterior_normal1, 2, mysummary), 2)) %>% kable()
+
+#run1.mcmc <- as.mcmc(run1)
+#summary(run1.mcmc)
+#run1.ggs <- ggs(run1.mcmc)  # restructure the data as a ggmcmc object
+#ggmcmc(run1.ggs)  # checkout Lab 10b for useful ggmcmc commands 
+
+plot(1:5000, posterior_normal1[, 10], ylab = "alpha", type = "l")  # not good
+plot(1:5000, posterior_normal1[, 11], ylab = "d0"   , type = "l")
+plot(1:5000, posterior_normal1[, 31], ylab = "sigma", type = "l")  # not good
+plot(1:5000, posterior_normal1[, 32], ylab = "tau"  , type = "l")
+
+mysummary(exp(posterior_normal1[, 11]))
+
+# Reparameterized meta-analysis model
+{
+sink("syncope2.txt")
+cat("
+    model {
+    for(i in 1:npapers) {
+    y0[i] ~ dbin(pie0[i], n0[i])
+    y1[i] ~ dbin(pie1[i], n1[i])
+    logit(pie0[i]) = beta[i] - delta[i]/2
+    logit(pie1[i]) = beta[i] + delta[i]/2
+    beta[i]  ~ dnorm(alpha, sigmainv2)
+    delta[i] ~ dnorm(d0, tauinv2)
+    OR[i]    = (pie1[i]/(1 - pie1[i])) / (pie0[i]/(1 - pie0[i]))
+    }
+    alpha ~ dnorm(a, b)
+    d0    ~ dnorm(0, d)
+    sigmainv2 ~ dgamma(c1,c2)
+    tauinv2   ~ dgamma(f1,f2)
+    sigma = 1/sqrt(sigmainv2)
+    tau   = 1/sqrt(tauinv2) 
+    }
+    ",fill = TRUE)
+sink()
+}
+
+run2 = jags(priordata, inits, parameters, "syncope2.txt", 
+            n.chains = 5, n.iter = 1100, n.burnin = 0, n.thin = 1)
+
+```
+
+# Question 0
+
+```{r, echo=FALSE, out.width="50%"}
+Output2 <- AddBurnin(run2$BUGSoutput$sims.array, 
+                     burnin = 100, 
+                     n.thin = 1)
+
+posterior_normal2 <- Output2$Burnin.sims.matrix  # posterior samples
+
+plot(1:5000, posterior_normal2[, 10], ylab = "alpha", type = "l")
+plot(1:5000, posterior_normal2[, 31], ylab = "sigma", type = "l")
+
+# Summary table of posterior samples
+t(round(apply(posterior_normal2, 2, mysummary), 2)) %>% 
+  kable(caption = "Summary statistics for posterior distribution (Model 2)",
+        align = "lrc")
+```
+
+Convergence for both $\alpha$ and $\sigma$ is now good as seen in the time-series plot.
+
+# Question 1
+
+Compared to the first model, $\alpha$ intercept term is removed, and the intercept term now gets soaked into `beta` random effects term. Accordingly, the posterior for `beta` is different for two models. Other than `beta` and $\sigma$, posterior inference for other parameters is more or less the same, as seen in the tables below.
+
+```{r, echo=FALSE}
+t(round(apply(posterior_normal1, 2, mysummary), 2)) %>% 
+  kable(caption = "Summary statistics for posterior distribution (Model 1)",
+        align = "lrc")
+```
+
+# Question 2
+
+`d0` is the single parameter we are most interested, as it represents the effect of previous history of cardiovascular disease (CVD) on mortality. The posterior inference for this particular remains more or less the same between the two models. Posterior means of odds ratio are all greater than 1 across 9 studies, and their corresponding 95% credible interval also do not contain one except for Study 7, suggesting that people with prior heart disease fares worse afters visiting the ER, which is consistent with what we would expect in medicine.
+
+# Question 3
+
+```{r, echo=FALSE}
+npapers <- 8
+inits <- rep(list(list(beta = rep(0, npapers),
+                       delta = rep(0, npapers),
+                       alpha = 0, d0 = 0,
+                       sigmainv2 = 1, tauinv2 = 1)), 5)
+
+df <- tibble()
+
+for (i in 1:9) {
+  priordata <- list(npapers = npapers, a = a, b = b, 
+                  d = d, c1 = c1, f1 = f1, c2 = c2, 
+                  f2 = f2, y0 = metadata[-i, 2], 
+                  n0 = metadata[-i, 1], y1 = metadata[-i, 4], 
+                  n1 = metadata[-i, 3])
+  
+  run3 = jags(priordata, inits, parameters, "syncope2.txt", 
+              n.chains = 5, n.iter = 1100, n.burnin = 0, n.thin = 1)
+  
+  Output3 <- AddBurnin(run3$BUGSoutput$sims.array, 
+                       burnin = 100, 
+                       n.thin = 1)
+
+  posterior_normal3 <- Output3$Burnin.sims.matrix  # posterior samples
+  
+  df <- bind_rows(df, round(mysummary(posterior_normal3[, 10]), 3))
+}
+
+df %>% 
+  kable(caption = "Sensitivity analysis for d0",
+        align = "lrc")
+```
+
+Study 7 and 9 have the most influence with omitting Study 7 increasing the OR and omitting Study 9 decreasing the OR. The final conclusion does not change, as 95% credible interval for all the analyses omitting a single study is greater than zero.
+
+# Question 4
+
+```{r, echo=FALSE}
+# round(cbind(metadata[, 2]/metadata[, 1], metadata[,4] / metadata[, 3]), 3)
+
+zzz <- cbind(metadata[, 2] / metadata[, 1], metadata[, 4] / metadata[,3])
+ORs <- (zzz[, 2] / (1 - zzz[, 2])) / (zzz[, 1]/(1 - zzz[, 1]))
+
+zzz <- cbind(zzz, ORs)
+```
+
+Looking at empirical OR's, it apperas that Study 7 and 9 have the lowest and highest OR, respectively, out of all studies, and hence influence the meta-analysis the most, consistent with what we observed.
